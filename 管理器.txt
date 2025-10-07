@@ -1,0 +1,407 @@
+@echo off
+chcp 936 >nul
+title AList版本管理器
+
+:: 自动获取管理员权限
+>nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
+if '%errorlevel%' neq '0' (
+    echo 正在请求管理员权限...
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
+    "%temp%\getadmin.vbs"
+    del "%temp%\getadmin.vbs"
+    exit /b
+)
+
+color 0A
+
+:: 配置文件路径
+set "CONFIG_FILE=%~dp0alist_versions.cfg"
+set "CURRENT_FILE=%~dp0alist_current.cfg"
+
+:: 首次运行检测
+if not exist "%CONFIG_FILE%" (
+    call :first_run
+)
+
+:: 主菜单
+goto main_menu
+
+:first_run
+cls
+echo.
+echo ==================================
+echo       AList版本管理器 初始化
+echo ==================================
+echo.
+echo 欢迎使用！检测到您是首次运行。
+echo 现在开始设置您的AList版本。
+echo.
+echo 您需要知道AList安装的完整路径。
+echo 例如：C:\AList\v3.43.0
+echo.
+pause
+
+set /a version_count=0
+:add_first_version
+cls
+echo.
+echo === 添加AList版本 ===
+echo.
+set /p "version=请输入版本号（例如 3.43.0）: "
+if "%version%"=="" goto add_first_version
+
+set /p "path=请输入版本 %version% 的完整路径: "
+if "%path%"=="" goto add_first_version
+
+if not exist "%path%\alist.exe" (
+    echo.
+    echo 错误：在该路径下找不到 alist.exe！
+    echo 请检查路径是否正确。
+    echo.
+    pause
+    goto add_first_version
+)
+
+echo %version%^|%path% >> "%CONFIG_FILE%"
+
+echo Dim ws > "%path%\start_hidden.vbs"
+echo Set ws = Wscript.CreateObject^("Wscript.Shell"^) >> "%path%\start_hidden.vbs"
+echo ws.run "alist.exe server",0 >> "%path%\start_hidden.vbs"
+echo Wscript.quit >> "%path%\start_hidden.vbs"
+
+set /a version_count+=1
+echo.
+echo 版本 %version% 添加成功！
+echo.
+
+if %version_count% lss 2 (
+    echo 建议至少配置2个版本以便切换。
+    echo 您想要添加另一个版本吗？
+    choice /c YN /m "添加另一个版本"
+    if %errorlevel% equ 1 goto add_first_version
+)
+
+echo 设置完成！现在可以使用版本管理器了。
+echo.
+pause
+goto :eof
+
+:main_menu
+cls
+echo.
+echo ==================================
+echo          AList版本管理器
+echo ==================================
+echo.
+
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do set current_version=%%a
+    echo 当前运行版本: !current_version!
+) else (
+    echo 当前运行版本: 无
+)
+
+tasklist /fi "imagename eq alist.exe" | find /i "alist.exe" >nul
+if %errorlevel% equ 0 (
+    echo 运行状态: [运行中]
+) else (
+    echo 运行状态: [已停止]
+)
+
+echo.
+echo 1. 启动AList版本
+echo 2. 停止AList
+echo 3. 切换版本
+echo 4. 管理版本
+echo 5. 查看详细状态
+echo 6. 退出程序
+echo.
+
+set /p choice=请输入选择 (1-6): 
+
+if "%choice%"=="1" goto start_menu
+if "%choice%"=="2" goto stop_alist
+if "%choice%"=="3" goto switch_version
+if "%choice%"=="4" goto manage_versions
+if "%choice%"=="5" goto show_status
+if "%choice%"=="6" goto exit_program
+
+echo 无效选择，请重新输入。
+timeout /t 2 >nul
+goto main_menu
+
+:start_menu
+cls
+echo === 启动AList版本 ===
+echo.
+echo 可用版本:
+call :list_versions
+if errorlevel 1 (
+    echo 未配置任何版本。请先添加版本。
+    timeout /t 3 >nul
+    goto main_menu
+)
+echo 0. 返回主菜单
+echo.
+set /p version_choice=请选择要启动的版本: 
+
+if "%version_choice%"=="0" goto main_menu
+
+call :get_version_by_index %version_choice%
+if "!selected_version!"=="" (
+    echo 无效选择
+    timeout /t 2 >nul
+    goto start_menu
+)
+
+call :start_alist !selected_version!
+goto main_menu
+
+:stop_alist
+echo.
+echo 正在停止AList...
+taskkill /f /im alist.exe >nul 2>&1
+if exist "%CURRENT_FILE%" del "%CURRENT_FILE%"
+echo AList 已成功停止。
+timeout /t 2 >nul
+goto main_menu
+
+:switch_version
+if not exist "%CONFIG_FILE%" (
+    echo 未配置任何版本。
+    timeout /t 2 >nul
+    goto main_menu
+)
+
+set current_version=
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do set current_version=%%a
+)
+
+if "!current_version!"=="" (
+    echo 当前没有运行中的版本。
+    goto start_menu
+)
+
+set switch_to=
+set count=0
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    set /a count+=1
+    if not "%%a"=="!current_version!" (
+        set switch_to=%%a
+        set switch_path=%%b
+        set switch_index=!count!
+    )
+)
+
+if "!switch_to!"=="" (
+    echo 只配置了一个版本，无法切换。
+    timeout /t 2 >nul
+    goto main_menu
+)
+
+echo 正在从 !current_version! 切换到 !switch_to!...
+call :stop_alist
+timeout /t 1 >nul
+call :start_alist !switch_to!
+goto main_menu
+
+:manage_versions
+cls
+echo === 版本管理 ===
+echo.
+echo 1. 添加新版本
+echo 2. 列出所有版本
+echo 3. 删除版本
+echo 4. 返回主菜单
+echo.
+set /p choice=请输入选择 (1-4): 
+
+if "%choice%"=="1" goto add_version
+if "%choice%"=="2" goto list_versions_menu
+if "%choice%"=="3" goto remove_version
+if "%choice%"=="4" goto main_menu
+
+echo 无效选择
+timeout /t 2 >nul
+goto manage_versions
+
+:add_version
+echo.
+set /p "new_version=请输入版本号（例如 3.43.0）: "
+if "%new_version%"=="" goto add_version
+
+set /p "new_path=请输入版本 %new_version% 的完整路径: "
+if "%new_path%"=="" goto add_version
+
+if not exist "!new_path!\alist.exe" (
+    echo.
+    echo 错误：在该路径下找不到 alist.exe！
+    echo 请检查路径是否正确。
+    echo.
+    pause
+    goto add_version
+)
+
+set exists=0
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    if "%%a"=="!new_version!" set exists=1
+)
+
+if !exists! equ 1 (
+    echo 版本 !new_version! 已存在。
+    timeout /t 2 >nul
+    goto manage_versions
+)
+
+echo !new_version!^|!new_path! >> "%CONFIG_FILE%"
+
+echo Dim ws > "!new_path!\start_hidden.vbs"
+echo Set ws = Wscript.CreateObject^("Wscript.Shell"^) >> "!new_path!\start_hidden.vbs"
+echo ws.run "alist.exe server",0 >> "!new_path!\start_hidden.vbs"
+echo Wscript.quit >> "!new_path!\start_hidden.vbs"
+
+echo.
+echo 版本 !new_version! 添加成功！
+timeout /t 2 >nul
+goto manage_versions
+
+:list_versions_menu
+cls
+echo === 已配置的版本 ===
+echo.
+call :list_versions
+echo.
+echo 按任意键继续...
+pause >nul
+goto manage_versions
+
+:remove_version
+cls
+echo === 删除版本 ===
+echo.
+call :list_versions
+if errorlevel 1 (
+    echo 没有可删除的版本。
+    timeout /t 2 >nul
+    goto manage_versions
+)
+echo 0. 取消
+echo.
+set /p version_choice=请选择要删除的版本: 
+
+if "%version_choice%"=="0" goto manage_versions
+
+call :get_version_by_index %version_choice%
+if "!selected_version!"=="" (
+    echo 无效选择
+    timeout /t 2 >nul
+    goto remove_version
+)
+
+copy nul "%CONFIG_FILE%.tmp" >nul
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    if not "%%a"=="!selected_version!" (
+        echo %%a^|%%b >> "%CONFIG_FILE%.tmp"
+    )
+)
+
+move /y "%CONFIG_FILE%.tmp" "%CONFIG_FILE%" >nul
+
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do (
+        if "%%a"=="!selected_version!" (
+            del "%CURRENT_FILE%"
+        )
+    )
+)
+
+echo 版本 !selected_version! 已删除。
+timeout /t 2 >nul
+goto manage_versions
+
+:show_status
+cls
+echo === AList 状态信息 ===
+echo.
+echo 已配置的版本:
+call :list_versions
+echo.
+
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do (
+        echo 当前运行版本: %%a
+    )
+) else (
+    echo 当前运行版本: 无
+)
+
+tasklist /fi "imagename eq alist.exe" | find /i "alist.exe" >nul
+if %errorlevel% equ 0 (
+    echo 进程状态: 运行中
+) else (
+    echo 进程状态: 已停止
+)
+
+echo.
+echo 按任意键返回主菜单...
+pause >nul
+goto main_menu
+
+:exit_program
+echo.
+echo 感谢使用AList版本管理器！
+timeout /t 1 >nul
+exit
+
+:: ========== 功能函数 ==========
+
+:start_alist
+set "target_version=%~1"
+set "target_path="
+
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    if "%%a"=="!target_version!" set "target_path=%%b"
+)
+
+if "!target_path!"=="" (
+    echo 错误：找不到版本 !target_version! 的路径
+    timeout /t 3 >nul
+    goto :eof
+)
+
+echo 正在启动版本 !target_version!...
+taskkill /f /im alist.exe >nul 2>&1
+timeout /t 1 >nul
+cd /d "!target_path!"
+start start_hidden.vbs
+
+echo !target_version! > "%CURRENT_FILE%"
+echo 版本 !target_version! 启动成功。
+timeout /t 2 >nul
+goto :eof
+
+:list_versions
+set count=0
+if not exist "%CONFIG_FILE%" (
+    echo 未配置任何版本。
+    exit /b 1
+)
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    set /a count+=1
+    echo !count!. %%a
+)
+exit /b 0
+
+:get_version_by_index
+set /a index=%~1
+set count=0
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    set /a count+=1
+    if !count! equ !index! (
+        set selected_version=%%a
+        set selected_path=%%b
+    )
+)
+goto :eof
