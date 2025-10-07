@@ -1,0 +1,421 @@
+@echo off
+chcp 65001 >nul
+title AList Version Manager
+
+:: Auto admin rights
+>nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
+if '%errorlevel%' neq '0' (
+    echo Requesting admin rights...
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
+    "%temp%\getadmin.vbs"
+    del "%temp%\getadmin.vbs"
+    exit /b
+)
+
+color 0A
+
+:: Config files in same directory
+set "CONFIG_FILE=%~dp0alist_versions.cfg"
+set "CURRENT_FILE=%~dp0alist_current.cfg"
+
+:: Check if first run
+if not exist "%CONFIG_FILE%" (
+    call :first_run_setup
+)
+
+:: Main menu
+goto main_menu
+
+:first_run_setup
+cls
+echo.
+echo ==================================
+echo    AList Version Manager Setup
+echo ==================================
+echo.
+echo Welcome! It looks like this is your first time.
+echo Let's set up your AList versions.
+echo.
+echo You'll need to know the paths to your AList installations.
+echo Example: C:\AList\v3.43.0
+echo.
+pause
+
+set /a version_count=0
+:add_first_version
+cls
+echo.
+echo === Add AList Version ===
+echo.
+set /p "VERSION=Enter version number (e.g. 3.43.0): "
+if "%VERSION%"=="" goto add_first_version
+
+set /p "PATH=Enter full path to version %VERSION%: "
+if "%PATH%"=="" goto add_first_version
+
+:: Validate path
+if not exist "%PATH%\alist.exe" (
+    echo.
+    echo ERROR: alist.exe not found at this location!
+    echo Please check the path and try again.
+    echo.
+    pause
+    goto add_first_version
+)
+
+:: Save to config
+echo %VERSION%^|%PATH% >> "%CONFIG_FILE%"
+
+:: Create VBS script for hidden start
+echo Dim ws > "%PATH%\start_hidden.vbs"
+echo Set ws = Wscript.CreateObject^("Wscript.Shell"^) >> "%PATH%\start_hidden.vbs"
+echo ws.run "alist.exe server",0 >> "%PATH%\start_hidden.vbs"
+echo Wscript.quit >> "%PATH%\start_hidden.vbs"
+
+set /a version_count+=1
+echo.
+echo Version %VERSION% added successfully!
+echo.
+
+:: Ask if user wants to add another version
+if %version_count% lss 2 (
+    echo It's recommended to have at least 2 versions for switching.
+    echo Do you want to add another version?
+    choice /c YN /m "Add another version"
+    if %errorlevel% equ 1 goto add_first_version
+)
+
+echo Setup complete! You can now use the version manager.
+echo.
+pause
+goto :eof
+
+:main_menu
+cls
+echo.
+echo ==================================
+echo      AList Version Manager
+echo ==================================
+echo.
+
+:: Load and display current version
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do set CURRENT_VERSION=%%a
+    echo Current version: !CURRENT_VERSION!
+) else (
+    echo Current version: None
+)
+
+:: Check if AList is running
+tasklist /fi "imagename eq alist.exe" | find /i "alist.exe" >nul
+if %errorlevel% equ 0 (
+    echo Status: ^<Running^>
+) else (
+    echo Status: ^<Stopped^>
+)
+
+echo.
+echo 1. Start AList Version
+echo 2. Stop AList
+echo 3. Switch Version
+echo 4. Manage Versions
+echo 5. Show Detailed Status
+echo 6. Exit
+echo.
+
+set /p choice=Enter choice (1-6): 
+
+if "%choice%"=="1" goto start_menu
+if "%choice%"=="2" goto stop_alist
+if "%choice%"=="3" goto switch_version
+if "%choice%"=="4" goto manage_versions
+if "%choice%"=="5" goto show_status
+if "%choice%"=="6" goto exit_program
+
+echo Invalid choice, please try again.
+timeout /t 2 >nul
+goto main_menu
+
+:start_menu
+cls
+echo === Start AList Version ===
+echo.
+echo Available versions:
+call :list_versions
+if errorlevel 1 (
+    echo No versions configured. Please add versions first.
+    timeout /t 3 >nul
+    goto main_menu
+)
+echo 0. Back to Main Menu
+echo.
+set /p version_choice=Select version to start: 
+
+if "%version_choice%"=="0" goto main_menu
+
+call :get_version_by_index %version_choice%
+if "!SELECTED_VERSION!"=="" (
+    echo Invalid selection
+    timeout /t 2 >nul
+    goto start_menu
+)
+
+call :start_alist !SELECTED_VERSION!
+goto main_menu
+
+:stop_alist
+echo.
+echo Stopping AList...
+taskkill /f /im alist.exe >nul 2>&1
+if exist "%CURRENT_FILE%" del "%CURRENT_FILE%"
+echo AList stopped successfully.
+timeout /t 2 >nul
+goto main_menu
+
+:switch_version
+if not exist "%CONFIG_FILE%" (
+    echo No versions configured.
+    timeout /t 2 >nul
+    goto main_menu
+)
+
+:: Get current version
+set CURRENT_VERSION=
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do set CURRENT_VERSION=%%a
+)
+
+if "!CURRENT_VERSION!"=="" (
+    echo No version is currently running.
+    goto start_menu
+)
+
+:: Find other versions
+set SWITCH_TO=
+set COUNT=0
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    set /a COUNT+=1
+    if not "%%a"=="!CURRENT_VERSION!" (
+        set SWITCH_TO=%%a
+        set SWITCH_PATH=%%b
+        set SWITCH_INDEX=!COUNT!
+    )
+)
+
+if "!SWITCH_TO!"=="" (
+    echo Only one version configured.
+    timeout /t 2 >nul
+    goto main_menu
+)
+
+echo Switching from !CURRENT_VERSION! to !SWITCH_TO!...
+call :stop_alist
+timeout /t 1 >nul
+call :start_alist !SWITCH_TO!
+goto main_menu
+
+:manage_versions
+cls
+echo === Version Management ===
+echo.
+echo 1. Add New Version
+echo 2. List All Versions
+echo 3. Remove Version
+echo 4. Back to Main Menu
+echo.
+set /p choice=Enter choice (1-4): 
+
+if "%choice%"=="1" goto add_version
+if "%choice%"=="2" goto list_versions_menu
+if "%choice%"=="3" goto remove_version
+if "%choice%"=="4" goto main_menu
+
+echo Invalid choice
+timeout /t 2 >nul
+goto manage_versions
+
+:add_version
+echo.
+set /p "NEW_VERSION=Enter version number (e.g. 3.43.0): "
+if "%NEW_VERSION%"=="" goto add_version
+
+set /p "NEW_PATH=Enter full path to version %NEW_VERSION%: "
+if "%NEW_PATH%"=="" goto add_version
+
+:: Validate path
+if not exist "!NEW_PATH!\alist.exe" (
+    echo.
+    echo ERROR: alist.exe not found at this location!
+    echo Please check the path and try again.
+    echo.
+    pause
+    goto add_version
+)
+
+:: Check if version already exists
+set EXISTS=0
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    if "%%a"=="!NEW_VERSION!" set EXISTS=1
+)
+
+if !EXISTS! equ 1 (
+    echo Version !NEW_VERSION! already exists.
+    timeout /t 2 >nul
+    goto manage_versions
+)
+
+:: Add to config
+echo !NEW_VERSION!^|!NEW_PATH! >> "%CONFIG_FILE%"
+
+:: Create VBS script
+echo Dim ws > "!NEW_PATH!\start_hidden.vbs"
+echo Set ws = Wscript.CreateObject^("Wscript.Shell"^) >> "!NEW_PATH!\start_hidden.vbs"
+echo ws.run "alist.exe server",0 >> "!NEW_PATH!\start_hidden.vbs"
+echo Wscript.quit >> "!NEW_PATH!\start_hidden.vbs"
+
+echo.
+echo Version !NEW_VERSION! added successfully!
+timeout /t 2 >nul
+goto manage_versions
+
+:list_versions_menu
+cls
+echo === Configured Versions ===
+echo.
+call :list_versions
+echo.
+echo Press any key to continue...
+pause >nul
+goto manage_versions
+
+:remove_version
+cls
+echo === Remove Version ===
+echo.
+call :list_versions
+if errorlevel 1 (
+    echo No versions to remove.
+    timeout /t 2 >nul
+    goto manage_versions
+)
+echo 0. Cancel
+echo.
+set /p version_choice=Select version to remove: 
+
+if "%version_choice%"=="0" goto manage_versions
+
+call :get_version_by_index %version_choice%
+if "!SELECTED_VERSION!"=="" (
+    echo Invalid selection
+    timeout /t 2 >nul
+    goto remove_version
+)
+
+:: Create temp config without the removed version
+copy nul "%CONFIG_FILE%.tmp" >nul
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    if not "%%a"=="!SELECTED_VERSION!" (
+        echo %%a^|%%b >> "%CONFIG_FILE%.tmp"
+    )
+)
+
+move /y "%CONFIG_FILE%.tmp" "%CONFIG_FILE%" >nul
+
+:: Update current version if needed
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do (
+        if "%%a"=="!SELECTED_VERSION!" (
+            del "%CURRENT_FILE%"
+        )
+    )
+)
+
+echo Version !SELECTED_VERSION! removed.
+timeout /t 2 >nul
+goto manage_versions
+
+:show_status
+cls
+echo === AList Status ===
+echo.
+echo Configured versions:
+call :list_versions
+echo.
+
+if exist "%CURRENT_FILE%" (
+    for /f "delims=" %%a in (%CURRENT_FILE%) do (
+        echo Currently running: %%a
+    )
+) else (
+    echo Currently running: None
+)
+
+tasklist /fi "imagename eq alist.exe" | find /i "alist.exe" >nul
+if %errorlevel% equ 0 (
+    echo Process status: Running
+) else (
+    echo Process status: Stopped
+)
+
+echo.
+echo Press any key to continue...
+pause >nul
+goto main_menu
+
+:exit_program
+echo.
+echo Thank you for using AList Version Manager!
+timeout /t 1 >nul
+exit
+
+:: ========== FUNCTIONS ==========
+
+:start_alist
+set "target_version=%~1"
+set "target_path="
+
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    if "%%a"=="!target_version!" set "target_path=%%b"
+)
+
+if "!target_path!"=="" (
+    echo ERROR: Could not find path for version !target_version!
+    timeout /t 3 >nul
+    goto :eof
+)
+
+echo Starting version !target_version!...
+taskkill /f /im alist.exe >nul 2>&1
+timeout /t 1 >nul
+cd /d "!target_path!"
+start start_hidden.vbs
+
+echo !target_version! > "%CURRENT_FILE%"
+echo Version !target_version! started successfully.
+timeout /t 2 >nul
+goto :eof
+
+:list_versions
+set COUNT=0
+if not exist "%CONFIG_FILE%" (
+    echo No versions configured.
+    exit /b 1
+)
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    set /a COUNT+=1
+    echo !COUNT!. %%a
+)
+exit /b 0
+
+:get_version_by_index
+set /a index=%~1
+set COUNT=0
+for /f "tokens=1,2 delims=|" %%a in (%CONFIG_FILE%) do (
+    set /a COUNT+=1
+    if !COUNT! equ !index! (
+        set SELECTED_VERSION=%%a
+        set SELECTED_PATH=%%b
+    )
+)
+goto :eof
