@@ -18,7 +18,8 @@
 <img width="1242" height="658" alt="image" src="https://github.com/user-attachments/assets/63878a5a-d00f-40ff-8380-b24cc0d7b3ae" />
 
 # 英文版配置好后
-<img width="1242" height="658" alt="image" src="https://github.com/user-attachments/assets/cbb2f2d2-e684-453a-830c-74b483fc8e9f" />
+<img width="1253" height="666" alt="image" src="https://github.com/user-attachments/assets/072cbceb-c720-4f0e-9571-ef45f35daa77" />
+
 
 
 
